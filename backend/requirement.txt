@@ -1,8 +1,2 @@
-fastapi
-uvicorn[standard]
-pydantic
-sqlalchemy
-databases
-python-multipart
-aiofiles
-python-dotenv
+socket
+threading
