@@ -1,23 +1,11 @@
 import requests
 
-API_KEY = "3XCZKLV99CT48SWT"
-URL = "https://api.thingspeak.com/update"
+READ_URL = "https://api.thingspeak.com/channels/3116996/feeds.json"
+params = {"results": 2}
+r = requests.get(READ_URL, params=params)
 
-# Data
-field1 = 20
-field2 = 33
-
-# Send GET request
-params = {
-    "api_key": API_KEY,
-    "field1": 1,
-    "field2": 2
-
-}
-response = requests.get(URL, params=params)
-
-if response.status_code == 200:
-    print("✅ Data sent successfully. Entry ID:", response.text)
+if r.status_code == 200:
+    feeds = r.json()
+    print("Recent feeds:", feeds["feeds"][1])
 else:
-
-    print("❌ Failed to send data. Status code:", response.status_code)
+    print("Error reading data:", r.status_code)
