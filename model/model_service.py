@@ -26,7 +26,6 @@ class ModelService:
 
     def preprocess_features(self, features: Dict[str, Any]) -> pd.DataFrame:
         try:
-            # Remove non-numeric / ID fields that are not used by the model
             exclude = ['transaction_id', 'user_id', 'timestamp']
             features_cleaned = {k: v for k, v in features.items() if k not in exclude}
 

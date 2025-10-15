@@ -53,7 +53,6 @@ def preprocessing(txn):
     drop_cols = ['local_timestamp', 'time', 'date', 'IP', 'device_id', 'merchant_id']
     txn = {k: v for k, v in txn.items() if k not in drop_cols}
 
-    # 2. Ensure required fields are present
     categorical_cols = [
         'currency', 'payment_channel', 'card_present', 'card_entry_mode',
         'auth_result', 'tokenised', 'recurring_flag', 'cross_border',
