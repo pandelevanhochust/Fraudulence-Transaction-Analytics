@@ -139,28 +139,6 @@ npm install
 npm run dev
 ```
 
-## Troubleshooting
-
-### Kafka connection issues
-- Ensure Zookeeper is running: `docker-compose ps zookeeper`
-- Check Kafka logs: `docker-compose logs kafka`
-- Verify Kafka is healthy: `docker-compose exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092`
-
-### Model service not loading model
-- Verify model file exists: `ls -la model/xgboost_model.pkl`
-- Check model service logs: `docker-compose logs model-service`
-- Ensure model file is mounted correctly in docker-compose.yaml
-
-### Frontend not connecting to backend
-- Check nginx configuration in `frontend/nginx.conf`
-- Verify backend is running: `curl http://localhost:8000/api/health`
-- Check browser console for CORS errors
-
-### Consumer not processing messages
-- Verify consumer is connected to Kafka: `docker-compose logs consumer`
-- Check if producer is sending messages: `docker-compose logs producer`
-- Verify model service is accessible: `curl http://localhost:8001/health`
-
 ## Project Structure
 
 ```
@@ -195,16 +173,4 @@ npm run dev
     ├── requirements.txt
     └── xgboost_model.pkl       # Model file (not in repo)
 ```
-
-## Notes
-
-- This is a university project, not production-ready code
-- The ML model accuracy is not a primary concern for this project
-- All services use Docker networking for inter-service communication
-- Database is stored in a Docker volume for persistence
-- Frontend uses Ant Design for modern UI components
-
-## License
-
-University Project - Educational Use Only
 
