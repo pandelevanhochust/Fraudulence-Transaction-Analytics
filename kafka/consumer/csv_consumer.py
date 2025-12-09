@@ -1,93 +1,191 @@
+
 import json
 import logging
 import os
-
-import pandas as pd
-import requests
 import time
+
+import requests
+
 from kafka import KafkaConsumer
+from kafka.errors import KafkaError
 
-KAFKA_BROKER = os.getenv('KAFKA_BROKERS', '13.228.128.157:9092')
-TOPIC = 'transactions'
-API_ENDPOINT = os.getenv('API_ENDPOINT', 'http://54.251.172.36:8000/api/transactions')
-API__MODEL_ENDPOINT = os.getenv('API__MODEL_ENDPOINT', 'http://13.214.239.8:8000/api/transactions')
+KAFKA_BROKERS = os.getenv('KAFKA_BROKERS', 'kafka:29092').split(',')
+TOPIC = os.getenv('TOPIC', 'transactions')
+MODEL_API_ENDPOINT = os.getenv('MODEL_API_ENDPOINT', 'http://model-service:8000/api/transactions')
+MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
+RETRY_DELAY = float(os.getenv('RETRY_DELAY', '2'))
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger(__name__)
-# scaler = joblib.load("scaler.pkl")
-
-# === KAFKA CONSUMER ===
-consumer = KafkaConsumer(
-    TOPIC,
-    bootstrap_servers=[KAFKA_BROKER],
-    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-    auto_offset_reset='earliest',
-    group_id='csv_consumer_group',
-    enable_auto_commit=True
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
 
+class TransactionConsumer:
+    def __init__(self, bootstrap_servers, model_api_endpoint, topic='transactions'):
+        self.bootstrap_servers = bootstrap_servers
+        self.model_api_endpoint = model_api_endpoint
+        self.topic = topic
+        self.consumer = None
+        self.max_retries = MAX_RETRIES
+        self.retry_delay = RETRY_DELAY
 
-def is_valid_transaction(txn):
-    required = ['transaction_id', 'user_id', 'amount', 'merchant_id', 'timestamp']
-    return all(k in txn for k in required)
+    def create_consumer(self):
+        try:
+            self.consumer = KafkaConsumer(
+                self.topic,
+                bootstrap_servers=self.bootstrap_servers,
+                value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+                key_deserializer=lambda x: x.decode('utf-8') if x else None,
+                group_id='fraud_detection_group',
+                auto_offset_reset='earliest',
+                enable_auto_commit=True,
+                auto_commit_interval_ms=1000,
+                session_timeout_ms=30000,
+                heartbeat_interval_ms=10000,
+                max_poll_records=10,
+                consumer_timeout_ms=5000,
+            )
+            logger.info(f"Kafka consumer created successfully for topic '{self.topic}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create Kafka consumer: {e}")
+            return False
 
+    def validate_transaction(self, transaction):
+        required_fields = ['transaction_id', 'amount']
+        
+        for field in required_fields:
+            if field not in transaction:
+                logger.error(f"Missing required field: {field}")
+                return False
 
-def post_to_api(txn):
-    try:
-        response = requests.post(API_ENDPOINT, json=txn, timeout=5)
-        if response.status_code == 200:
-            logger.info(f"[✓] Sent {txn['transaction_id']} to API")
-        else:
-            logger.warning(f"[!] API {response.status_code}: {response.text}")
-    except Exception as e:
-        logger.error(f"[✗] Failed to send to API: {e}")
+        amount = transaction.get('amount')
+        if amount is None:
+            logger.error("Amount is None")
+            return False
+        
+        try:
+            float(amount)
+        except (ValueError, TypeError):
+            logger.error(f"Invalid amount type: {type(amount)}, value: {amount}")
+            return False
 
-def post_to_api_model(xscale):
-    try:
-        response = requests.post(API__MODEL_ENDPOINT, json={"features": xscale}, timeout=5)
-        logger.info(f"POST status: {response.status_code}, Response: {response.text}")
-    except Exception as e:
-        logger.error(f"Error posting to API: {e}")
+        return True
 
-def preprocessing(txn):
-    drop_cols = ['local_timestamp', 'time', 'date', 'IP', 'device_id', 'merchant_id']
-    txn = {k: v for k, v in txn.items() if k not in drop_cols}
-
-    categorical_cols = [
-        'currency', 'payment_channel', 'card_present', 'card_entry_mode',
-        'auth_result', 'tokenised', 'recurring_flag', 'cross_border',
-        'auth_characteristics', 'message_type', 'merchant_country',
-        'pin_verif_method', 'term_location'
-    ]
-
-    df = pd.DataFrame([txn])
-
-    for col in df.columns:
-        if df[col].dtype == 'object':
+    def send_to_model_service(self, transaction):
+        for attempt in range(self.max_retries):
             try:
-                df[col] = df[col].str.replace(',', '.').astype(float)
-            except:
-                pass
-    df = pd.get_dummies(df, columns=[col for col in categorical_cols if col in df.columns], drop_first=True)
-    return df.fillna(0).iloc[0].to_dict()
+                response = requests.post(
+                    self.model_api_endpoint,
+                    json=transaction,
+                    timeout=10,
+                    headers={'Content-Type': 'application/json'}
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    fraud_status = "FRAUD" if result.get('prediction', 0) == 1 else "NORMAL"
+                    logger.info(
+                        f"✓ Sent to Model Service: {transaction.get('transaction_id', 'unknown')} "
+                        f"- Amount: ${transaction.get('amount', 0):.2f} - Status: {fraud_status}"
+                    )
+                    return True
+                elif response.status_code == 422:
+                    logger.error(f"Validation error for transaction {transaction.get('transaction_id', 'unknown')}: {response.text}")
+                    return False
+                else:
+                    logger.warning(f"Model Service returned {response.status_code}: {response.text}")
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout sending to Model Service (attempt {attempt + 1}/{self.max_retries})")
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"Connection error to Model Service (attempt {attempt + 1}/{self.max_retries})")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error: {e}")
+
+            if attempt < self.max_retries - 1:
+                time.sleep(self.retry_delay * (2 ** attempt))  # Exponential backoff
+
+        logger.error(f"Failed to send transaction to Model Service after {self.max_retries} attempts")
+        return False
+
+    def start_consuming(self):
+        logger.info("Starting Kafka consumer...")
+        logger.info(f"Model Service endpoint: {self.model_api_endpoint}")
+
+        retry_count = 0
+        while retry_count < self.max_retries:
+            try:
+                if not self.create_consumer():
+                    retry_count += 1
+                    logger.warning(
+                        f"Retrying consumer creation in {self.retry_delay} seconds... ({retry_count}/{self.max_retries})"
+                    )
+                    time.sleep(self.retry_delay)
+                    continue
+
+                logger.info("Consumer started successfully. Waiting for messages...")
+                message_count = 0
+
+                for message in self.consumer:
+                    try:
+                        transaction = message.value
+                        message_count += 1
+
+                        transaction_id = transaction.get('transaction_id', f'unknown_{message_count}')
+                        amount = transaction.get('amount', 0)
+                        logger.info(
+                            f"Received message #{message_count}: {transaction_id} - Amount: ${amount:.2f}"
+                        )
+
+                        if self.validate_transaction(transaction):
+                            self.send_to_model_service(transaction)
+                        else:
+                            logger.error(f"Invalid transaction data: {transaction}")
+
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to decode message JSON: {e}")
+                    except Exception as e:
+                        logger.error(f"Error processing message: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                    time.sleep(0.1)
+
+            except KafkaError as e:
+                logger.error(f"Kafka error: {e}")
+                retry_count += 1
+                if retry_count < self.max_retries:
+                    logger.info(f"Retrying in {self.retry_delay} seconds... ({retry_count}/{self.max_retries})")
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error("Max retries reached. Exiting...")
+                    break
+
+            except KeyboardInterrupt:
+                logger.info("Received shutdown signal...")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                retry_count += 1
+                if retry_count < self.max_retries:
+                    time.sleep(self.retry_delay)
+                else:
+                    break
+            finally:
+                if self.consumer:
+                    self.consumer.close()
+                    logger.info("Consumer closed")
+
+        logger.info("Consumer stopped")
 
 
-def start_consuming():
-    logger.info(f"Listening on topic '{TOPIC}' from broker '{KAFKA_BROKER}'")
-    for message in consumer:
-        txn = message.value
-        logger.info(f"Received: {txn.get('transaction_id', '[no id]')}")
-
-        if is_valid_transaction(txn):
-            # post_to_api(txn)
-            xscale = preprocessing(txn)
-            post_to_api_model(xscale)
-
-        else:
-            logger.warning(f"Invalid transaction skipped: {txn}")
-
-        time.sleep(0.1)  # throttle to avoid flooding API
-
-
-if __name__ == '__main__':
-    start_consuming()
+if __name__ == "__main__":
+    consumer = TransactionConsumer(
+        bootstrap_servers=KAFKA_BROKERS,
+        model_api_endpoint=MODEL_API_ENDPOINT,
+        topic=TOPIC
+    )
+    consumer.start_consuming()

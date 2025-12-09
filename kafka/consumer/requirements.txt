@@ -1,19 +1,2 @@
-# Kafka consumer
-kafka-python
-
-# HTTP requests
-requests
-
-# Logging
-loguru
-
-# Data handling and preprocessing
-pandas
-numpy
-
-# Model tools (Scaler, etc.)
-scikit-learn
-
-# If using XGBoost just for model file formats (optional)
-xgboost
-
+kafka-python==2.0.2
+requests==2.31.0

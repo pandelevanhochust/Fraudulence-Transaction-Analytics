@@ -1,14 +1,16 @@
+import os
+from datetime import datetime
+
+import requests
+from config import settings
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from config import settings
-from model_service import model_service
-from schemas import PredictionInput, PredictionOutput, HealthCheck
-from datetime import datetime
 from loguru import logger
-import requests
+from model_service import model_service
+from schemas import HealthCheck, PredictionInput, PredictionOutput
 
 app = FastAPI(title=settings.api_title, version="1.0.0")
-TRANSACTION_API_URL = "http://54.251.172.36:8000/api/transactions"
+TRANSACTION_API_URL = os.getenv("BACKEND_API_URL", "http://backend:8000/api/transactions")
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,34 +38,36 @@ async def predict(input: PredictionInput):
 @app.post("/api/transactions")
 async def process_transaction(transaction_data: dict):
     """
-    Receive transaction → predict fraud → send result to external Transaction API
+    Receive transaction → predict fraud → send result to Backend API
+    Pipeline: Consumer → Model Service → Backend API
     """
     try:
-        logger.info(f"Received transaction: {transaction_data.get('transaction_id', 'unknown')}")
-
-        # Build PredictionInput and predict
-        prediction_input = PredictionInput(**transaction_data)
+        transaction_id = transaction_data.get('transaction_id', 'unknown')
+        logger.info(f"Received transaction: {transaction_id}")
+        prediction_input = PredictionInput(features=transaction_data)
         result = model_service.predict(prediction_input)
 
-        # Prepare enriched data
         enriched_transaction = {
             **transaction_data,
             "prediction": result.prediction,
-            "fraud_probability": result.probability,
+            "fraud_probability": result.probability[0] if result.probability else result.prediction,
             "predicted_at": datetime.utcnow().isoformat()
         }
 
-        # POST to external Transaction API
-        response = requests.post(TRANSACTION_API_URL, json=enriched_transaction)
-        if response.status_code == 200:
-            logger.info(f"[✓] Sent prediction to Transaction API")
-        else:
-            logger.warning(f"[!] Failed to forward prediction: {response.status_code} {response.text}")
+        try:
+            response = requests.post(TRANSACTION_API_URL, json=enriched_transaction, timeout=10)
+            if response.status_code == 200:
+                logger.info(f"[✓] Sent enriched transaction to Backend API: {transaction_id}")
+            else:
+                logger.warning(f"[!] Failed to forward to Backend API: {response.status_code} {response.text}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[✗] Error forwarding to Backend API: {e}")
 
         return {
             "status": "success",
-            "transaction_id": prediction_input.transaction_id,
-            "prediction": result.dict()
+            "transaction_id": transaction_id,
+            "prediction": result.prediction,
+            "fraud_probability": result.probability[0] if result.probability else result.prediction
         }
 
     except Exception as e:

@@ -1,34 +1,30 @@
-# === BACKEND UPDATE ===
-# File: backend/main.py
-
+import json
+import os
 import sqlite3
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-import uuid
-import os
 
-DB_PATH = "transactions.db"
+DB_PATH = os.getenv("DB_PATH", "transactions.db")
+os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", exist_ok=True)
 app = FastAPI(title="Transaction API", version="1.0.0")
 
-# Enable CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://54.251.172.36:3000",
-        "http://localhost:5173",
-        "http://54.251.172.36:3000",
         "http://localhost:3000",
-        "https://localhost:3000",
+        "http://localhost:5173",
+        "http://frontend:80",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Models
 class TransactionCreate(BaseModel):
     class Config:
         extra = "allow"
@@ -54,7 +50,6 @@ class PaginatedResponse(BaseModel):
     pages: int
 
 
-# === SQLite Helper Functions ===
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()

@@ -1,8 +1,9 @@
-import xgboost as xgb
-import pandas as pd
-from loguru import logger
-from typing import Dict, Any
+from typing import Any, Dict
+
 import config
+import pandas as pd
+import xgboost as xgb
+from loguru import logger
 from schemas import PredictionInput, PredictionOutput
 
 settings = config.settings
@@ -26,16 +27,25 @@ class ModelService:
 
     def preprocess_features(self, features: Dict[str, Any]) -> pd.DataFrame:
         try:
-            exclude = ['transaction_id', 'user_id', 'timestamp']
+            if isinstance(features, dict) and 'features' in features and len(features) == 1:
+                features = features['features']
+            
+            exclude = ['transaction_id', 'user_id', 'timestamp', 'prediction', 'fraud_probability', 'predicted_at']
             features_cleaned = {k: v for k, v in features.items() if k not in exclude}
 
             df = pd.DataFrame([features_cleaned]).fillna(0)
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    try:
+                        df[col] = pd.to_numeric(df[col], errors='ignore')
+                    except:
+                        pass
 
-            # Ensure correct order of features
             if self.feature_names:
                 for feature in set(self.feature_names) - set(df.columns):
-                    df[feature] = 0  # Fill missing columns with 0
-                df = df[self.feature_names]
+                    df[feature] = 0  
+                if all(f in df.columns for f in self.feature_names):
+                    df = df[self.feature_names]
 
             return df
         except Exception as e:
@@ -48,7 +58,6 @@ class ModelService:
 
         df = self.preprocess_features(prediction_input.features)
 
-        # ✅ Convert DataFrame to DMatrix
         dmatrix = xgb.DMatrix(df)
 
         pred_probs = self.model.predict(dmatrix)

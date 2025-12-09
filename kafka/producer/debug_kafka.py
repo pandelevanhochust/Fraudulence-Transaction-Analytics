@@ -1,14 +1,12 @@
-# debug_kafka.py
-"""
-Debugging tools for Kafka connectivity and message flow
-"""
 import json
 import logging
-from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient
+import time
+
+import requests
 from kafka.admin import NewTopic
 from kafka.errors import KafkaError
-import requests
-import time
+
+from kafka import KafkaAdminClient, KafkaConsumer, KafkaProducer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +18,6 @@ class KafkaDebugger:
         self.api_endpoint = api_endpoint
 
     def test_kafka_connection(self):
-        """Test basic Kafka broker connectivity"""
         logger.info("Testing Kafka broker connectivity...")
         try:
             admin_client = KafkaAdminClient(
@@ -28,11 +25,9 @@ class KafkaDebugger:
                 client_id='debug_client'
             )
 
-            # Get cluster metadata
             metadata = admin_client.describe_cluster()
             logger.info(f"✓ Connected to Kafka cluster: {len(metadata)} brokers")
 
-            # List topics
             topics = admin_client.list_topics()
             logger.info(f"✓ Available topics: {list(topics)}")
 
@@ -47,21 +42,18 @@ class KafkaDebugger:
         """Test API endpoint connectivity"""
         logger.info("Testing API endpoint connectivity...")
 
-        # Test basic connectivity
         try:
             response = requests.get(f"{self.api_endpoint}/docs", timeout=10)
             logger.info(f"✓ API docs accessible: {response.status_code}")
         except Exception as e:
             logger.error(f"✗ API docs not accessible: {e}")
 
-        # Test health endpoint
         try:
             response = requests.get(f"{self.api_endpoint}/health", timeout=10)
             logger.info(f"✓ Health endpoint: {response.status_code}")
         except Exception as e:
             logger.warning(f"Health endpoint not available: {e}")
 
-        # Test transactions endpoint with sample data
         sample_transaction = {
             "transaction_id": "test-123",
             "user_id": "user-123",
@@ -85,17 +77,14 @@ class KafkaDebugger:
             return False
 
     def create_topic_if_not_exists(self, topic_name='transactions'):
-        """Create Kafka topic if it doesn't exist"""
         logger.info(f"Checking/creating topic: {topic_name}")
         try:
             admin_client = KafkaAdminClient(bootstrap_servers=self.bootstrap_servers)
 
-            # Check if topic exists
             existing_topics = admin_client.list_topics()
             if topic_name in existing_topics:
                 logger.info(f"✓ Topic '{topic_name}' already exists")
             else:
-                # Create topic
                 topic = NewTopic(
                     name=topic_name,
                     num_partitions=3,
@@ -209,8 +198,7 @@ class KafkaDebugger:
 
 
 def main():
-    # Configuration
-    KAFKA_BROKERS = ['13.228.128.157:9092']  # Fixed: removed http://
+    KAFKA_BROKERS = ['13.228.128.157:9092'] 
     API_ENDPOINT = 'http://54.251.172.36:8000'
 
     debugger = KafkaDebugger(KAFKA_BROKERS, API_ENDPOINT)

@@ -1,13 +1,147 @@
 version: "3.8"
+
 services:
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - fraud-detection-network
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - fraud-detection-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka Producer
+  producer:
+    build:
+      context: ./kafka/producer
+      dockerfile: Dockerfile
+    container_name: producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      TOPIC: transactions
+      CSV_FILE: data_train.csv
+      DELAY_BETWEEN_MESSAGES: 2
+    volumes:
+      - ./kafka/producer:/app/data:ro
+    working_dir: /app/data
+    networks:
+      - fraud-detection-network
+    restart: unless-stopped
+
+  # Kafka Consumer
+  consumer:
+    build:
+      context: ./kafka/consumer
+      dockerfile: Dockerfile
+    container_name: consumer
+    depends_on:
+      - kafka
+      - model-service
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      TOPIC: transactions
+      MODEL_API_ENDPOINT: http://model-service:8000/api/transactions
+    networks:
+      - fraud-detection-network
+    restart: unless-stopped
+
+  # Model Service (Fraud Detection)
+  model-service:
+    build:
+      context: ./model
+      dockerfile: Dockerfile
+    container_name: model-service
+    ports:
+      - "8001:8000"
+    environment:
+      MODEL_PATH: /app/models/xgboost_model.pkl
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      BACKEND_API_URL: http://backend:8000/api/transactions
+    volumes:
+      - ./model:/app/models:ro
+    networks:
+      - fraud-detection-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    ports:
+      - "8000:8000"
+    environment:
+      DB_PATH: /app/transactions.db
+    volumes:
+      - backend-data:/app
+    networks:
+      - fraud-detection-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
     ports:
       - "3000:80"
     depends_on:
       - backend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    networks:
+      - fraud-detection-network
+    restart: unless-stopped
 
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
+networks:
+  fraud-detection-network:
+    driver: bridge
+
+volumes:
+  backend-data:
